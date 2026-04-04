@@ -1,0 +1,14 @@
+[package]
+name = "wasm_calling"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+members = ["crates/*"]
+
+[profile.release]
+debug = true
+
+[dependencies]
+rangemap = "1.7.1"
+walrus = "0.26.1"

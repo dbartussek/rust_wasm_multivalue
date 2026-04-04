@@ -1,0 +1,7 @@
+[package]
+name = "wasm_calling_support"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+wasm_calling_support_macros = {path = "../wasm_calling_support_macros"}
