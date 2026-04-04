@@ -1,4 +1,8 @@
-use std::collections::{BTreeMap, BTreeSet};
+use clap::Parser;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+};
 use walrus::{
     ExportItem, FunctionBuilder, FunctionId, FunctionKind, ImportId, LocalFunction, Module,
     ModuleFunctions, ModuleLocals, ModuleTypes, ValType,
@@ -8,50 +12,21 @@ use walrus::{
     },
 };
 
+#[derive(Parser)]
+#[command(version)]
+struct Args {
+    input: PathBuf,
+    output: PathBuf,
+}
+
+
 fn main() {
-    let mut module =
-        Module::from_file("target/wasm32-unknown-unknown/release/wasm_calling_test.wasm").unwrap();
+    let args = Args::parse();
 
-    let support_imports: BTreeMap<ImportId, String> = module
-        .imports
-        .iter()
-        .filter(|import| import.name.starts_with("wasm_calling_support"))
-        .map(|import| (import.id(), import.name.clone()))
-        .collect();
+    let mut module = Module::from_file(&args.input).unwrap();
 
-    let support_functions: BTreeMap<FunctionId, HelperFunctionDirection> = module
-        .functions()
-        .filter_map(|f| match &f.kind {
-            FunctionKind::Import(def) => {
-                if let Some(_) = support_imports.get(&def.import) {
-                    let function_type = module.types.get(def.ty).as_function().unwrap();
-                    let direction = function_type
-                        .params()
-                        .first()
-                        .map(|output| HelperFunctionDirection::Output(*output))
-                        .or_else(|| {
-                            function_type
-                                .results()
-                                .first()
-                                .map(|input| HelperFunctionDirection::Input(*input))
-                        })
-                        .unwrap();
-
-                    Some((f.id(), direction))
-                } else {
-                    None
-                }
-            },
-            _ => None,
-        })
-        .collect();
-
-    for import in support_imports.keys() {
-        module.imports.delete(*import);
-    }
-    for function in support_functions.keys() {
-        module.funcs.delete(*function);
-    }
+    let support = SupportData::scan(&module);
+    support.remove_from_module(&mut module);
 
     let mut candidates = Vec::new();
 
@@ -82,28 +57,70 @@ fn main() {
             other => panic!("Transformed functions must be local {other:?}"),
         };
 
-        let new_function_id = ScannedFunction::scan(old_function, &support_functions).build(
-            identifier,
-            types,
-            funcs,
-            locals,
-            &support_functions,
-        );
+        let new_function_id = ScannedFunction::scan(old_function, &support)
+            .build(identifier, types, funcs, locals, &support);
 
         funcs.delete(function_id);
         exports.delete(export.id());
         exports.add(identifier, new_function_id);
     }
 
-    module
-        .emit_wasm_file("target/wasm32-unknown-unknown/release/wasm_calling_test_adjusted.wasm")
-        .unwrap();
+    module.emit_wasm_file(&args.output).unwrap();
 }
 
-#[derive(Debug, Copy, Clone)]
-enum HelperFunctionDirection {
-    Input(ValType),
-    Output(ValType),
+#[derive(Debug)]
+struct SupportData {
+    support_imports: BTreeMap<ImportId, String>,
+
+    input_functions: BTreeMap<FunctionId, ValType>,
+    output_functions: BTreeMap<FunctionId, ValType>,
+}
+
+impl SupportData {
+    pub fn scan(module: &Module) -> Self {
+        let support_imports: BTreeMap<ImportId, String> = module
+            .imports
+            .iter()
+            .filter(|import| import.name.starts_with("wasm_calling_support"))
+            .map(|import| (import.id(), import.name.clone()))
+            .collect();
+
+        let mut input_functions = BTreeMap::<FunctionId, ValType>::new();
+        let mut output_functions = BTreeMap::<FunctionId, ValType>::new();
+
+        for function in module.functions() {
+            if let FunctionKind::Import(imported) = &function.kind {
+                if support_imports.contains_key(&imported.import) {
+                    let function_type = module.types.get(imported.ty).as_function().unwrap();
+
+                    if let Some(ty) = function_type.params().first() {
+                        output_functions.insert(function.id(), ty.clone());
+                    } else if let Some(ty) = function_type.results().first() {
+                        input_functions.insert(function.id(), ty.clone());
+                    }
+                }
+            }
+        }
+
+        Self {
+            support_imports,
+            input_functions,
+            output_functions,
+        }
+    }
+
+    pub fn remove_from_module(&self, module: &mut Module) {
+        for import in self.support_imports.keys() {
+            module.imports.delete(*import);
+        }
+        for function in self
+            .input_functions
+            .keys()
+            .chain(self.output_functions.keys())
+        {
+            module.funcs.delete(*function);
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -116,10 +133,7 @@ struct ScannedFunction {
 }
 
 impl ScannedFunction {
-    fn scan(
-        source: &LocalFunction,
-        support_functions: &BTreeMap<FunctionId, HelperFunctionDirection>,
-    ) -> Self {
+    fn scan(source: &LocalFunction, support: &SupportData) -> Self {
         let mut this = ScannedFunction {
             entry: source.entry_block(),
             blocks: BTreeMap::new(),
@@ -181,15 +195,10 @@ impl ScannedFunction {
                     },
 
                     Instr::Call(inner) => {
-                        if let Some(helper) = support_functions.get(&inner.func) {
-                            match helper {
-                                HelperFunctionDirection::Input(ty) => {
-                                    this.params.push(ty.clone());
-                                },
-                                HelperFunctionDirection::Output(ty) => {
-                                    this.results.push(ty.clone());
-                                },
-                            }
+                        if let Some(ty) = support.input_functions.get(&inner.func) {
+                            this.params.push(ty.clone());
+                        } else if let Some(ty) = support.output_functions.get(&inner.func) {
+                            this.results.push(ty.clone());
                         }
                     },
 
@@ -209,7 +218,7 @@ impl ScannedFunction {
         types: &mut ModuleTypes,
         funcs: &mut ModuleFunctions,
         locals: &mut ModuleLocals,
-        support_functions: &BTreeMap<FunctionId, HelperFunctionDirection>,
+        support: &SupportData,
     ) -> FunctionId {
         let arg_locals = self
             .params
@@ -305,17 +314,12 @@ impl ScannedFunction {
                     },
 
                     Instr::Call(inner) => {
-                        if let Some(helper) = support_functions.get(&inner.func) {
-                            match helper {
-                                HelperFunctionDirection::Input(_) => {
-                                    block_builder.local_get(arg_locals[arg_counter]);
-                                    arg_counter += 1;
-                                },
-                                HelperFunctionDirection::Output(_) => {
-                                    block_builder.local_set(results_locals[result_counter]);
-                                    result_counter += 1;
-                                },
-                            }
+                        if support.input_functions.contains_key(&inner.func) {
+                            block_builder.local_get(arg_locals[arg_counter]);
+                            arg_counter += 1;
+                        } else if support.output_functions.contains_key(&inner.func) {
+                            block_builder.local_set(results_locals[result_counter]);
+                            result_counter += 1;
                         } else {
                             block_builder.call(inner.func);
                         }

@@ -8,4 +8,8 @@ license = "MIT OR Apache-2.0"
 members = ["crates/*"]
 
 [dependencies]
+clap = { version = "4.6.0", features = ["derive"] }
 walrus = "0.26.1"
+
+[profile.release]
+lto = true
