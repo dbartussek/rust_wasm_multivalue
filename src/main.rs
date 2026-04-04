@@ -1,9 +1,8 @@
-use rangemap::{RangeMap, RangeSet};
 use std::collections::{BTreeMap, BTreeSet};
-use walrus::ir::{Instr, InstrSeqId, InstrSeqType, LoadKind, Value};
 use walrus::{
-    ConstExpr, ExportItem, FunctionBuilder, FunctionId, FunctionKind, GlobalKind, InstrSeqBuilder,
-    LocalFunction, LocalId, Module, ModuleFunctions, ModuleLocals, ModuleTypes, ValType,
+    ExportItem, FunctionBuilder, FunctionId, FunctionKind, ImportId, InstrSeqBuilder,
+    LocalFunction, Module, ModuleFunctions, ModuleLocals, ModuleTypes, ValType,
+    ir::{Instr, InstrSeqId, InstrSeqType},
 };
 
 fn main() {
@@ -12,55 +11,57 @@ fn main() {
 
     dbg!(&module.locals.iter().collect::<Vec<_>>());
 
+    let support_imports: BTreeMap<ImportId, String> = module
+        .imports
+        .iter()
+        .filter(|import| import.name.starts_with("wasm_calling_support"))
+        .map(|import| (import.id(), import.name.clone()))
+        .collect();
+
+    let support_functions: BTreeMap<FunctionId, HelperFunctionDirection> = module
+        .functions()
+        .filter_map(|f| match &f.kind {
+            FunctionKind::Import(def) => {
+                if let Some(_) = support_imports.get(&def.import) {
+                    let function_type = module.types.get(def.ty).as_function().unwrap();
+                    let direction = function_type
+                        .params()
+                        .first()
+                        .map(|output| HelperFunctionDirection::Output(*output))
+                        .or_else(|| {
+                            function_type
+                                .results()
+                                .first()
+                                .map(|input| HelperFunctionDirection::Input(*input))
+                        })
+                        .unwrap();
+
+                    Some((f.id(), direction))
+                } else {
+                    None
+                }
+            },
+            _ => None,
+        })
+        .collect();
+
+    dbg!(&support_functions);
+
+    for import in support_imports.keys() {
+        module.imports.delete(*import);
+    }
+    for function in support_functions.keys() {
+        module.funcs.delete(*function);
+    }
+
     let mut candidates = Vec::new();
-    let mut supports = Vec::new();
 
     for export in module.exports.iter() {
         if export.name.starts_with("WRAPPED_") {
             candidates.push(export.clone());
-        } else if export.name.starts_with("SUPPORT_") {
-            supports.push(export.clone());
         }
     }
 
-    let support_values = supports
-        .iter()
-        .map(|global| {let value = match global.item {
-            ExportItem::Function(fid) => {
-                let function = module.funcs.get(fid);
-
-                match &function.kind {
-                    FunctionKind::Local(local) => {
-                        let block = local.block(local.entry_block());
-
-                        match &block.instrs[0] {
-                            (Instr::Const(v), _) => walrus_value_as_u64(&v.value),
-                            (other, _) => panic!(
-                                "A support function must consist of a constant value, not {other:?}"
-                            ),
-                        }
-                    }
-                    other => panic!("Bad function {other:?}"),
-                }
-            }
-            ExportItem::Global(gid) => {
-                let global = module.globals.get(gid);
-                match &global.kind {
-                    GlobalKind::Local(ConstExpr::Value(v)) => walrus_value_as_u64(v),
-                    other => panic!("Bad global value {other:?}"),
-                }
-            }
-            other => panic!("Bad global value {other:?}"),
-        };
-            (global.name.clone(), value)
-        })
-        .collect::<BTreeMap<_, _>>();
-
-    dbg!(&candidates, &support_values);
-
-    for export in supports {
-        module.exports.delete(export.id());
-    }
     for export in candidates {
         let function_id = match &export.item {
             ExportItem::Function(fid) => *fid,
@@ -68,21 +69,6 @@ fn main() {
         };
 
         let identifier = &export.name["WRAPPED_".len()..];
-
-        let mut inputs = BTreeMap::new();
-        for i in 0usize.. {
-            let prefix = format!("SUPPORT_{identifier}_INPUT_{i}_");
-
-            if let Some((name, value)) = get_support_value(&support_values, &prefix, i) {
-                inputs.insert(name, value);
-            } else {
-                break;
-            }
-        }
-        let output = get_support_value(&support_values, &format!("SUPPORT_{identifier}_OUTPUT"), 0)
-            .map(|(_, v)| v);
-
-        dbg!(&inputs, &output);
 
         let Module {
             funcs,
@@ -97,8 +83,8 @@ fn main() {
             other => panic!("Transformed functions must be local {other:?}"),
         };
 
-        let new_function_id = ScannedFunction::scan(old_function, locals, inputs, output)
-            .build(identifier, types, funcs, locals);
+        let new_function_id = ScannedFunction::scan(old_function, locals, &support_functions)
+            .build(identifier, types, funcs, locals, &support_functions);
 
         funcs.delete(function_id);
         exports.delete(export.id());
@@ -110,58 +96,10 @@ fn main() {
         .unwrap();
 }
 
-fn walrus_value_as_u64(v: &Value) -> u64 {
-    match v {
-        Value::I32(v) => *v as u64,
-        Value::I64(v) => *v as u64,
-        Value::F32(v) => *v as u64,
-        Value::F64(v) => *v as u64,
-        Value::V128(v) => *v as u64,
-    }
-}
-
-#[derive(Clone, Debug)]
-struct SupportValueData {
-    pub address: u64,
-    pub size: u64,
-
-    pub index: usize,
-}
-
-fn get_support_value(
-    support_values: &BTreeMap<String, u64>,
-    prefix: &str,
-    index: usize,
-) -> Option<(String, SupportValueData)> {
-    let relevant_values = support_values
-        .iter()
-        .filter(|(key, _)| key.starts_with(&prefix));
-
-    let mut name = None;
-    let mut size = None;
-    let mut address = None;
-
-    for (key, value) in relevant_values {
-        if key.ends_with("SIZE") {
-            size = Some(*value);
-        } else {
-            name = Some(key[prefix.len()..].to_string());
-            address = Some(*value);
-        }
-    }
-
-    if let (Some(name), Some(size), Some(address)) = (name, size, address) {
-        Some((
-            name,
-            SupportValueData {
-                address,
-                size,
-                index,
-            },
-        ))
-    } else {
-        None
-    }
+#[derive(Debug, Copy, Clone)]
+enum HelperFunctionDirection {
+    Input(ValType),
+    Output(ValType),
 }
 
 #[derive(Debug)]
@@ -170,44 +108,21 @@ struct ScannedFunction {
     blocks: BTreeMap<InstrSeqId, (InstrSeqType, Vec<Instr>)>,
 
     params: Vec<ValType>,
-
     results: Vec<ValType>,
-
-    input_range: RangeMap<u64, usize>,
-    output_range: RangeMap<u64, usize>,
-
-    inputs: BTreeMap<(usize, u64), ValType>,
 }
 
 impl ScannedFunction {
     fn scan(
         source: &LocalFunction,
         locals: &ModuleLocals,
-
-        inputs: BTreeMap<String, SupportValueData>,
-        output: Option<SupportValueData>,
+        support_functions: &BTreeMap<FunctionId, HelperFunctionDirection>,
     ) -> Self {
-        let mut input_range = RangeMap::new();
-        for value in inputs.values() {
-            input_range.insert(value.address..(value.address + value.size), value.index);
-        }
-        let mut output_range = RangeMap::new();
-        for value in output.iter() {
-            output_range.insert(value.address..(value.address + value.size), value.index);
-        }
-
         let mut this = ScannedFunction {
             entry: source.entry_block(),
             blocks: BTreeMap::new(),
 
             params: Vec::new(),
-
             results: Vec::new(),
-
-            input_range,
-            output_range,
-
-            inputs: BTreeMap::new(),
         };
 
         let mut block_ids = BTreeSet::new();
@@ -229,16 +144,16 @@ impl ScannedFunction {
                     // All instructions that jump to a different block
                     Instr::Block(inner) => {
                         working_set.insert(inner.seq);
-                    }
+                    },
                     Instr::Loop(inner) => {
                         working_set.insert(inner.seq);
-                    }
+                    },
                     Instr::Br(inner) => {
                         working_set.insert(inner.block);
-                    }
+                    },
                     Instr::BrIf(inner) => {
                         working_set.insert(inner.block);
-                    }
+                    },
                     Instr::BrTable(inner) => {
                         for block in inner
                             .blocks
@@ -248,41 +163,32 @@ impl ScannedFunction {
                         {
                             working_set.insert(block);
                         }
-                    }
+                    },
                     Instr::BrOnCast(inner) => {
                         working_set.insert(inner.block);
-                    }
+                    },
                     Instr::BrOnCastFail(inner) => {
                         working_set.insert(inner.block);
-                    }
+                    },
                     Instr::BrOnNull(inner) => {
                         working_set.insert(inner.block);
-                    }
+                    },
                     Instr::BrOnNonNull(inner) => {
                         working_set.insert(inner.block);
-                    }
+                    },
 
-                    // When it's a memory load, check if it is from the arguments
-                    Instr::Load(inner) => {
-                        if let Some(arg_index) = this.input_range.get(&inner.arg.offset).copied() {
-                            let ty = match inner.kind {
-                                LoadKind::I32 { .. }
-                                | LoadKind::I32_8 { .. }
-                                | LoadKind::I32_16 { .. } => ValType::I32,
-                                LoadKind::I64 { .. }
-                                | LoadKind::I64_8 { .. }
-                                | LoadKind::I64_16 { .. }
-                                | LoadKind::I64_32 { .. } => ValType::I64,
-
-                                LoadKind::F32 { .. } => ValType::F32,
-                                LoadKind::F64 { .. } => ValType::F64,
-
-                                LoadKind::V128 { .. } => ValType::V128,
-                            };
-
-                            this.inputs.insert((arg_index, inner.arg.offset), ty);
+                    Instr::Call(inner) => {
+                        if let Some(helper) = support_functions.get(&inner.func) {
+                            match helper {
+                                HelperFunctionDirection::Input(ty) => {
+                                    this.params.push(ty.clone());
+                                },
+                                HelperFunctionDirection::Output(ty) => {
+                                    this.results.push(ty.clone());
+                                },
+                            }
                         }
-                    }
+                    },
 
                     _ => (),
                 }
@@ -290,8 +196,6 @@ impl ScannedFunction {
 
             this.blocks.insert(id, (block.ty.clone(), instructions));
         }
-
-        dbg!(&this.input_range, &this.output_range, &this.inputs);
 
         this
     }
@@ -302,9 +206,15 @@ impl ScannedFunction {
         types: &mut ModuleTypes,
         funcs: &mut ModuleFunctions,
         locals: &mut ModuleLocals,
+        support_functions: &BTreeMap<FunctionId, HelperFunctionDirection>,
     ) -> FunctionId {
-        let args = self
+        let arg_locals = self
             .params
+            .iter()
+            .map(|param| locals.add(*param))
+            .collect::<Vec<_>>();
+        let results_locals = self
+            .results
             .iter()
             .map(|param| locals.add(*param))
             .collect::<Vec<_>>();
@@ -320,29 +230,56 @@ impl ScannedFunction {
             block_id_mapping.insert(*in_block_id, out_block_id);
         }
 
-        let mut body = builder.func_body();
+        let blocks_to_process = std::iter::once(builder.func_body_id())
+            .chain(block_id_mapping.values().copied())
+            .collect::<Vec<_>>();
 
-        block_id_mapping.insert(self.entry, body.id());
+        block_id_mapping.insert(self.entry, builder.func_body_id());
 
-        self.build_block(self.entry, &mut body);
+        let mut arg_counter = 0;
+        let mut result_counter = 0;
 
-        builder.finish(args, funcs)
-    }
+        for block_id in blocks_to_process {
+            let mut block_builder = builder.instr_seq(block_id);
 
-    fn build_block(&mut self, id: InstrSeqId, builder: &mut InstrSeqBuilder) {
-        let (_, instructions) = self.blocks.get(&id).unwrap();
+            let (_, instructions) = self.blocks.get(&self.entry).unwrap();
+            for instruction in instructions.clone() {
+                match instruction {
+                    Instr::Block(..)
+                    | Instr::Loop(..)
+                    | Instr::Br(..)
+                    | Instr::BrIf(..)
+                    | Instr::BrTable(..) => (),
 
-        for instruction in instructions.clone() {
-            match instruction {
-                Instr::Block(..)
-                | Instr::Loop(..)
-                | Instr::Br(..)
-                | Instr::BrIf(..)
-                | Instr::BrTable(..) => (),
-                default => {
-                    builder.instr(default);
+                    Instr::Call(inner) => {
+                        if let Some(helper) = support_functions.get(&inner.func) {
+                            match helper {
+                                HelperFunctionDirection::Input(_) => {
+                                    block_builder.local_get(arg_locals[arg_counter]);
+                                    arg_counter += 1;
+                                },
+                                HelperFunctionDirection::Output(ty) => {
+                                    block_builder.local_set(results_locals[result_counter]);
+                                    result_counter += 1;
+                                },
+                            }
+                        } else {
+                            block_builder.call(inner.func);
+                        }
+                    },
+
+                    default => {
+                        block_builder.instr(default);
+                    },
                 }
             }
         }
+
+        let mut root_block = builder.func_body();
+        for result in results_locals {
+            root_block.local_get(result);
+        }
+
+        builder.finish(arg_locals, funcs)
     }
 }

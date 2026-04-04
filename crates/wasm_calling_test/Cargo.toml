@@ -7,5 +7,5 @@ edition = "2024"
 crate-type = ["cdylib"]
 
 [dependencies]
-wasm_calling_support = {path = "../wasm_calling_support"}
+wasm_calling_support = { path = "../wasm_calling_support" }
 

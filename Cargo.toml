@@ -6,9 +6,8 @@ edition = "2024"
 [workspace]
 members = ["crates/*"]
 
+[dependencies]
+walrus = "0.26.1"
+
 [profile.release]
 debug = true
-
-[dependencies]
-rangemap = "1.7.1"
-walrus = "0.26.1"
