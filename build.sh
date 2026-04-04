@@ -1,7 +1,7 @@
 clear
 set -e
 
-cargo fmt
+sh format.sh
 
 cargo build --package=wasm_calling_test --release --target wasm32-unknown-unknown
 wasm2wat target/wasm32-unknown-unknown/release/wasm_calling_test.wasm > target/wasm32-unknown-unknown/release/wasm_calling_test.wat

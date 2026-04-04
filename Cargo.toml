@@ -2,12 +2,10 @@
 name = "wasm_calling"
 version = "0.1.0"
 edition = "2024"
+license = "MIT OR Apache-2.0"
 
 [workspace]
 members = ["crates/*"]
 
 [dependencies]
 walrus = "0.26.1"
-
-[profile.release]
-debug = true

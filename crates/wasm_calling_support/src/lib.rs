@@ -29,10 +29,27 @@ unsafe extern "C" {
     fn wasm_calling_support_read_u64_arg() -> u64;
     fn wasm_calling_support_write_u64_arg(value: u64);
 
+    fn wasm_calling_support_read_i8_arg() -> i8;
+    fn wasm_calling_support_write_i8_arg(value: i8);
+    fn wasm_calling_support_read_i16_arg() -> i16;
+    fn wasm_calling_support_write_i16_arg(value: i16);
+    fn wasm_calling_support_read_i32_arg() -> i32;
+    fn wasm_calling_support_write_i32_arg(value: i32);
+    fn wasm_calling_support_read_i64_arg() -> i64;
+    fn wasm_calling_support_write_i64_arg(value: i64);
+
+    fn wasm_calling_support_read_usize_arg() -> usize;
+    fn wasm_calling_support_write_usize_arg(value: usize);
+    fn wasm_calling_support_read_isize_arg() -> isize;
+    fn wasm_calling_support_write_isize_arg(value: isize);
+
     fn wasm_calling_support_read_f32_arg() -> f32;
     fn wasm_calling_support_write_f32_arg(value: f32);
     fn wasm_calling_support_read_f64_arg() -> f64;
     fn wasm_calling_support_write_f64_arg(value: f64);
+
+    fn wasm_calling_support_read_ptr_arg() -> *mut ();
+    fn wasm_calling_support_write_ptr_arg(value: *const ());
 }
 
 unsafe impl MagicArg for u8 {
@@ -80,6 +97,74 @@ unsafe impl MagicArg for u64 {
     }
 }
 
+unsafe impl MagicArg for i8 {
+    #[inline(always)]
+    unsafe fn read() -> Self {
+        unsafe { wasm_calling_support_read_i8_arg() }
+    }
+
+    #[inline(always)]
+    unsafe fn write(value: Self) {
+        unsafe { wasm_calling_support_write_i8_arg(value) }
+    }
+}
+unsafe impl MagicArg for i16 {
+    #[inline(always)]
+    unsafe fn read() -> Self {
+        unsafe { wasm_calling_support_read_i16_arg() }
+    }
+
+    #[inline(always)]
+    unsafe fn write(value: Self) {
+        unsafe { wasm_calling_support_write_i16_arg(value) }
+    }
+}
+unsafe impl MagicArg for i32 {
+    #[inline(always)]
+    unsafe fn read() -> Self {
+        unsafe { wasm_calling_support_read_i32_arg() }
+    }
+
+    #[inline(always)]
+    unsafe fn write(value: Self) {
+        unsafe { wasm_calling_support_write_i32_arg(value) }
+    }
+}
+unsafe impl MagicArg for i64 {
+    #[inline(always)]
+    unsafe fn read() -> Self {
+        unsafe { wasm_calling_support_read_i64_arg() }
+    }
+
+    #[inline(always)]
+    unsafe fn write(value: Self) {
+        unsafe { wasm_calling_support_write_i64_arg(value) }
+    }
+}
+
+unsafe impl MagicArg for usize {
+    #[inline(always)]
+    unsafe fn read() -> Self {
+        unsafe { wasm_calling_support_read_usize_arg() }
+    }
+
+    #[inline(always)]
+    unsafe fn write(value: Self) {
+        unsafe { wasm_calling_support_write_usize_arg(value) }
+    }
+}
+unsafe impl MagicArg for isize {
+    #[inline(always)]
+    unsafe fn read() -> Self {
+        unsafe { wasm_calling_support_read_isize_arg() }
+    }
+
+    #[inline(always)]
+    unsafe fn write(value: Self) {
+        unsafe { wasm_calling_support_write_isize_arg(value) }
+    }
+}
+
 unsafe impl MagicArg for f32 {
     #[inline(always)]
     unsafe fn read() -> Self {
@@ -100,5 +185,54 @@ unsafe impl MagicArg for f64 {
     #[inline(always)]
     unsafe fn write(value: Self) {
         unsafe { wasm_calling_support_write_f64_arg(value) }
+    }
+}
+
+unsafe impl<T> MagicArg for *const T {
+    #[inline(always)]
+    unsafe fn read() -> Self {
+        unsafe { wasm_calling_support_read_ptr_arg() as *const T }
+    }
+
+    #[inline(always)]
+    unsafe fn write(value: Self) {
+        unsafe { wasm_calling_support_write_ptr_arg(value as *const ()) }
+    }
+}
+
+unsafe impl<T> MagicArg for *mut T {
+    #[inline(always)]
+    unsafe fn read() -> Self {
+        unsafe { wasm_calling_support_read_ptr_arg() as *mut T }
+    }
+
+    #[inline(always)]
+    unsafe fn write(value: Self) {
+        unsafe { wasm_calling_support_write_ptr_arg(value as *const ()) }
+    }
+}
+
+unsafe impl<const N: usize, T> MagicArg for [T; N]
+where
+    T: MagicArg,
+{
+    #[inline(always)]
+    unsafe fn read() -> Self {
+        unsafe {
+            let mut array = [const { MaybeUninit::<T>::uninit() }; N];
+
+            for entry in array.iter_mut() {
+                *entry = MaybeUninit::new(T::read());
+            }
+
+            array.map(|it| it.assume_init())
+        }
+    }
+
+    #[inline(always)]
+    unsafe fn write(value: Self) {
+        for entry in value {
+            unsafe { T::write(entry) };
+        }
     }
 }

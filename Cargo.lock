@@ -235,7 +235,7 @@ dependencies = [
 
 [[package]]
 name = "wasm_calling_test"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "wasm_calling_support",
 ]

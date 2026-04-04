@@ -1,11 +1,11 @@
 [package]
 name = "wasm_calling_test"
-version = "0.1.0"
+version = "0.0.0"
 edition = "2024"
+license = "CC0-1.0 OR Unlicense"
 
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
 wasm_calling_support = { path = "../wasm_calling_support" }
-
