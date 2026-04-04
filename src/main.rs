@@ -1,15 +1,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 use walrus::{
-    ExportItem, FunctionBuilder, FunctionId, FunctionKind, ImportId, InstrSeqBuilder,
-    LocalFunction, Module, ModuleFunctions, ModuleLocals, ModuleTypes, ValType,
-    ir::{Instr, InstrSeqId, InstrSeqType},
+    ExportItem, FunctionBuilder, FunctionId, FunctionKind, ImportId, LocalFunction, Module,
+    ModuleFunctions, ModuleLocals, ModuleTypes, ValType,
+    ir::{
+        Block, Br, BrIf, BrOnCast, BrOnCastFail, BrOnNonNull, BrOnNull, BrTable, Instr, InstrSeqId,
+        InstrSeqType, Loop,
+    },
 };
 
 fn main() {
     let mut module =
         Module::from_file("target/wasm32-unknown-unknown/release/wasm_calling_test.wasm").unwrap();
-
-    dbg!(&module.locals.iter().collect::<Vec<_>>());
 
     let support_imports: BTreeMap<ImportId, String> = module
         .imports
@@ -44,8 +45,6 @@ fn main() {
             _ => None,
         })
         .collect();
-
-    dbg!(&support_functions);
 
     for import in support_imports.keys() {
         module.imports.delete(*import);
@@ -83,8 +82,13 @@ fn main() {
             other => panic!("Transformed functions must be local {other:?}"),
         };
 
-        let new_function_id = ScannedFunction::scan(old_function, locals, &support_functions)
-            .build(identifier, types, funcs, locals, &support_functions);
+        let new_function_id = ScannedFunction::scan(old_function, &support_functions).build(
+            identifier,
+            types,
+            funcs,
+            locals,
+            &support_functions,
+        );
 
         funcs.delete(function_id);
         exports.delete(export.id());
@@ -114,7 +118,6 @@ struct ScannedFunction {
 impl ScannedFunction {
     fn scan(
         source: &LocalFunction,
-        locals: &ModuleLocals,
         support_functions: &BTreeMap<FunctionId, HelperFunctionDirection>,
     ) -> Self {
         let mut this = ScannedFunction {
@@ -133,7 +136,7 @@ impl ScannedFunction {
                 continue;
             }
 
-            let block = source.block(source.entry_block());
+            let block = source.block(id);
 
             let mut instructions = Vec::with_capacity(block.instrs.len());
 
@@ -201,7 +204,7 @@ impl ScannedFunction {
     }
 
     fn build(
-        mut self,
+        self,
         identifier: &str,
         types: &mut ModuleTypes,
         funcs: &mut ModuleFunctions,
@@ -230,26 +233,76 @@ impl ScannedFunction {
             block_id_mapping.insert(*in_block_id, out_block_id);
         }
 
-        let blocks_to_process = std::iter::once(builder.func_body_id())
-            .chain(block_id_mapping.values().copied())
-            .collect::<Vec<_>>();
-
         block_id_mapping.insert(self.entry, builder.func_body_id());
 
         let mut arg_counter = 0;
         let mut result_counter = 0;
 
-        for block_id in blocks_to_process {
-            let mut block_builder = builder.instr_seq(block_id);
+        for source_block_id in block_id_mapping.keys().copied() {
+            let new_block_id = block_id_mapping[&source_block_id];
 
-            let (_, instructions) = self.blocks.get(&self.entry).unwrap();
+            let mut block_builder = builder.instr_seq(new_block_id);
+
+            let (_, instructions) = self.blocks.get(&source_block_id).unwrap();
+
             for instruction in instructions.clone() {
                 match instruction {
-                    Instr::Block(..)
-                    | Instr::Loop(..)
-                    | Instr::Br(..)
-                    | Instr::BrIf(..)
-                    | Instr::BrTable(..) => (),
+                    Instr::Block(inner) => {
+                        let mapped_target = block_id_mapping[&inner.seq];
+                        block_builder.instr(Instr::Block(Block { seq: mapped_target }));
+                    },
+                    Instr::Loop(inner) => {
+                        let mapped_target = block_id_mapping[&inner.seq];
+                        block_builder.instr(Instr::Loop(Loop { seq: mapped_target }));
+                    },
+                    Instr::Br(inner) => {
+                        let mapped_target = block_id_mapping[&inner.block];
+                        block_builder.instr(Instr::Br(Br {
+                            block: mapped_target,
+                        }));
+                    },
+                    Instr::BrIf(inner) => {
+                        let mapped_target = block_id_mapping[&inner.block];
+                        block_builder.instr(Instr::BrIf(BrIf {
+                            block: mapped_target,
+                        }));
+                    },
+                    Instr::BrTable(inner) => {
+                        let blocks = inner
+                            .blocks
+                            .iter()
+                            .map(|block| block_id_mapping[block])
+                            .collect();
+                        let default = block_id_mapping[&inner.default];
+                        block_builder.instr(Instr::BrTable(BrTable { blocks, default }));
+                    },
+
+                    Instr::BrOnCast(inner) => {
+                        let mapped_target = block_id_mapping[&inner.block];
+                        block_builder.instr(Instr::BrOnCast(BrOnCast {
+                            block: mapped_target,
+                            ..inner.clone()
+                        }));
+                    },
+                    Instr::BrOnCastFail(inner) => {
+                        let mapped_target = block_id_mapping[&inner.block];
+                        block_builder.instr(Instr::BrOnCastFail(BrOnCastFail {
+                            block: mapped_target,
+                            ..inner.clone()
+                        }));
+                    },
+                    Instr::BrOnNull(inner) => {
+                        let mapped_target = block_id_mapping[&inner.block];
+                        block_builder.instr(Instr::BrOnNull(BrOnNull {
+                            block: mapped_target,
+                        }));
+                    },
+                    Instr::BrOnNonNull(inner) => {
+                        let mapped_target = block_id_mapping[&inner.block];
+                        block_builder.instr(Instr::BrOnNonNull(BrOnNonNull {
+                            block: mapped_target,
+                        }));
+                    },
 
                     Instr::Call(inner) => {
                         if let Some(helper) = support_functions.get(&inner.func) {
@@ -258,7 +311,7 @@ impl ScannedFunction {
                                     block_builder.local_get(arg_locals[arg_counter]);
                                     arg_counter += 1;
                                 },
-                                HelperFunctionDirection::Output(ty) => {
+                                HelperFunctionDirection::Output(_) => {
                                     block_builder.local_set(results_locals[result_counter]);
                                     result_counter += 1;
                                 },

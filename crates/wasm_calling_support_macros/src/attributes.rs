@@ -1,7 +1,7 @@
-use proc_macro2::{Ident, Punct, Spacing, TokenStream};
+use proc_macro2::{Punct, Spacing, TokenStream};
 use quote::{format_ident, quote};
 use std::ops::Deref;
-use syn::{FnArg, ItemFn, Pat, ReturnType, Type, Visibility};
+use syn::{FnArg, ItemFn, Pat, ReturnType, Visibility};
 
 pub fn wrap_wasm_impl(input: ItemFn) -> TokenStream {
     let hash = Punct::new('#', Spacing::Alone);
@@ -10,23 +10,6 @@ pub fn wrap_wasm_impl(input: ItemFn) -> TokenStream {
 
     let mut read_args = quote! {};
     let mut arguments = quote! {};
-
-    fn create_static(ident: &Ident, ty: &Type) -> TokenStream {
-        let hash = Punct::new('#', Spacing::Alone);
-        let size_ident = format_ident!("{ident}_SIZE");
-
-        quote! {
-            #hash [allow(non_upper_case_globals)]
-            #hash [unsafe(no_mangle)]
-            static mut #ident: std::mem::MaybeUninit< #ty >
-                = std::mem::MaybeUninit::uninit();
-
-            #hash [unsafe(no_mangle)]
-            pub extern "C" fn #size_ident() -> usize {
-                std::mem::size_of::<#ty>()
-            }
-        }
-    }
 
     for input in input.sig.inputs.iter() {
         let (ident, ty) = match input {
