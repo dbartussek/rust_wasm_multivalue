@@ -73,6 +73,8 @@ fn main() {
 
 #[derive(Debug)]
 struct ScannedFunction {
+    identifier: String,
+
     entry: InstrSeqId,
     blocks: BTreeMap<InstrSeqId, (InstrSeqType, Vec<Instr>)>,
 
@@ -92,6 +94,8 @@ impl ScannedFunction {
             .unwrap_or_else(|| panic!("Missing signature for function {identifier}"));
 
         let mut this = ScannedFunction {
+            identifier: identifier.to_string(),
+
             entry: source.entry_block(),
             blocks: BTreeMap::new(),
 
@@ -193,8 +197,9 @@ impl ScannedFunction {
 
         block_id_mapping.insert(self.entry, builder.func_body_id());
 
+        let mut arg_counter = 0;
+
         for source_block_id in block_id_mapping.keys().copied() {
-            let mut arg_counter = 0;
             let mut result_counter = 0;
 
             let new_block_id = block_id_mapping[&source_block_id];
@@ -286,13 +291,13 @@ impl ScannedFunction {
                     },
                 }
             }
-
-            if arg_counter != 0 && arg_counter != arg_locals.len() {
-                panic!("Too complex argument flow");
-            }
             if result_counter != 0 && result_counter != results_locals.len() {
-                panic!("Too complex results flow");
+                panic!("Too complex results flow in {}", self.identifier);
             }
+        }
+
+        if arg_counter != 0 && arg_counter != arg_locals.len() {
+            panic!("Too complex argument flow in {}", self.identifier);
         }
 
         let mut root_block = builder.func_body();
