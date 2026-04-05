@@ -1,7 +1,7 @@
 use proc_macro2::{Punct, Spacing, TokenStream};
 use quote::{format_ident, quote};
 use std::ops::Deref;
-use syn::{FnArg, ItemFn, Pat, ReturnType, Visibility};
+use syn::{FnArg, ItemFn, Pat, ReturnType, Type, Visibility};
 
 pub fn wrap_wasm_impl(input: ItemFn) -> TokenStream {
     let hash = Punct::new('#', Spacing::Alone);
@@ -12,6 +12,7 @@ pub fn wrap_wasm_impl(input: ItemFn) -> TokenStream {
     let mut read_args = quote! {};
     let mut arguments = quote! {};
     let mut number_of_args = quote! { 0 };
+    let mut signature_helper = quote! {};
 
     for input in input.sig.inputs.iter() {
         let (ident, ty) = match input {
@@ -31,6 +32,11 @@ pub fn wrap_wasm_impl(input: ItemFn) -> TokenStream {
             };
         };
         read_args = quote! { #read_args #read };
+
+        signature_helper = quote! {
+            #signature_helper
+            std::mem::forget(unsafe { <#ty as #magic_arg>::read() });
+        };
 
         arguments = quote! { #arguments #ident, };
 
@@ -67,22 +73,51 @@ pub fn wrap_wasm_impl(input: ItemFn) -> TokenStream {
             }
         },
         ReturnType::Type(_, ty) => {
+            let types: Vec<&Type> = match &**ty {
+                Type::Tuple(t) => t.elems.iter().collect(),
+                _ => {
+                    vec![&**ty]
+                },
+            };
+
+            let mut number_of_returns = quote! { 0 };
+            for t in &types {
+                number_of_returns =
+                    quote! { #number_of_returns + <#t as #magic_arg>::NUMBER_OF_ARGS };
+            }
+
+            let do_return = if types.len() == 1 {
+                quote! { #magic_arg::write(ret); }
+            } else {
+                let mut ret = quote! {};
+
+                for i in 0..types.len() {
+                    let i = syn::Index::from(i);
+                    ret = quote! {
+                        #ret
+                        #magic_arg::write(ret.#i);
+                    };
+                }
+
+                ret
+            };
+
+            for ty in types.iter() {
+                signature_helper = quote! {
+                    #signature_helper
+                    std::mem::forget(unsafe { <#ty as #magic_arg>::read() });
+                };
+            }
+
             quote! {
                 #hash [unsafe(no_mangle)]
                 pub extern "C" fn #function_ident_nr_returns() -> usize {
-                    <#ty as #magic_arg>::NUMBER_OF_ARGS
-                }
-
-                #hash [unsafe(no_mangle)]
-                #hash [allow(unused)]
-                pub extern "C" fn #function_ident_signature() {
-                    #read_args
-                    unsafe { <#ty as #magic_arg>::read(); }
+                    #number_of_returns
                 }
 
                 unsafe {
                     let ret: #ty = #function_ident_inner ( #arguments );
-                    #magic_arg::write(ret);
+                    #do_return
                 }
             }
         },
@@ -97,6 +132,12 @@ pub fn wrap_wasm_impl(input: ItemFn) -> TokenStream {
             #hash [unsafe(no_mangle)]
             pub extern "C" fn #function_ident_nr_arguments() -> usize {
                 const { #number_of_args }
+            }
+
+            #hash [unsafe(no_mangle)]
+            #hash [allow(unused)]
+            pub extern "C" fn #function_ident_signature() {
+                #signature_helper
             }
 
             #read_args

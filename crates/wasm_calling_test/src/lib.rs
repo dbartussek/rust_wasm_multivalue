@@ -45,3 +45,10 @@ pub fn test(mut tst: Test) -> Test {
 
     tst
 }
+
+
+#[wrap_wasm]
+pub fn multi_return(a: Box<u32>) -> (Box<u32>, u32) {
+    let value = *a;
+    (a, value)
+}

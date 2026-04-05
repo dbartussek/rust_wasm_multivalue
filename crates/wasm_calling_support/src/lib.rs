@@ -244,6 +244,23 @@ unsafe impl<T> MagicArg for *mut T {
     }
 }
 
+unsafe impl<T> MagicArg for Box<T>
+where
+    T: MagicArg,
+{
+    const NUMBER_OF_ARGS: usize = T::NUMBER_OF_ARGS;
+
+    #[inline(always)]
+    unsafe fn read() -> Self {
+        unsafe { Box::from_raw(MagicArg::read()) }
+    }
+
+    #[inline(always)]
+    unsafe fn write(value: Self) {
+        unsafe { MagicArg::write(Box::into_raw(value)) }
+    }
+}
+
 unsafe impl<const N: usize, T> MagicArg for [T; N]
 where
     T: MagicArg,
