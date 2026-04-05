@@ -52,3 +52,9 @@ pub fn multi_return(a: Box<u32>) -> (Box<u32>, u32) {
     let value = *a;
     (a, value)
 }
+
+#[wrap_wasm]
+pub fn void() {}
+
+#[wrap_wasm]
+pub fn explicit_void() -> () {}

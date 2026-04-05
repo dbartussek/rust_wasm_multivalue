@@ -28,7 +28,7 @@ fn main() {
 
     let mut module = Module::from_file(&args.input).unwrap();
 
-    let support = SupportData::scan(&module);
+    let mut support = SupportData::scan(&module);
 
     let mut candidates = Vec::new();
 
@@ -62,8 +62,8 @@ fn main() {
         } = &mut module;
         let new_function_id = scanned.build(identifier, types, funcs, locals, &support);
 
-        funcs.delete(function_id);
-        exports.delete(export.id());
+        support.mark_function_for_deletion(function_id);
+        support.mark_export_for_deletion(export.id());
         exports.add(identifier, new_function_id);
     }
 

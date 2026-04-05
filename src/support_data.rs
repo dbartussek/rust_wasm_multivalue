@@ -100,6 +100,14 @@ impl SupportData {
         }
     }
 
+    pub fn mark_export_for_deletion(&mut self, export_id: ExportId) {
+        self.support_exports.insert(export_id);
+    }
+
+    pub fn mark_function_for_deletion(&mut self, function_id: FunctionId) {
+        self.support_functions.insert(function_id);
+    }
+
     pub fn get_function_signature(
         &self,
         funcs: &ModuleFunctions,

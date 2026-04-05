@@ -63,12 +63,6 @@ pub fn wrap_wasm_impl(input: ItemFn) -> TokenStream {
                     0
                 }
 
-                #hash [unsafe(no_mangle)]
-                #hash [allow(unused)]
-                pub extern "C" fn #function_ident_signature() {
-                    #read_args
-                }
-
                 #function_ident_inner ( #arguments );
             }
         },
