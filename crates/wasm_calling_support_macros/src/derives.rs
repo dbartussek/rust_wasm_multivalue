@@ -4,6 +4,7 @@ use syn::{Data, DeriveInput, Fields};
 
 pub fn magic_arg_impl(input: DeriveInput) -> TokenStream {
     let hash = Punct::new('#', Spacing::Alone);
+    let magic_arg = quote! { wasm_calling_support::MagicArg };
 
     let ident = &input.ident;
 
@@ -11,6 +12,8 @@ pub fn magic_arg_impl(input: DeriveInput) -> TokenStream {
     let mut construct_read = quote! {};
 
     let mut write_fields = quote! {};
+
+    let mut number_of_args = quote! { 0 };
 
     match &input.data {
         Data::Struct(data) => {
@@ -22,8 +25,10 @@ pub fn magic_arg_impl(input: DeriveInput) -> TokenStream {
 
                 read_fields = quote! {
                     #read_fields
-                    let #temp_ident: #ty = wasm_calling_support::MagicArg::read();
+                    let #temp_ident: #ty = #magic_arg::read();
                 };
+
+                number_of_args = quote! { #number_of_args + <#ty as #magic_arg>::NUMBER_OF_ARGS };
 
                 if let Some(ident) = &f.ident {
                     construct_read_fields = quote! {
@@ -33,7 +38,7 @@ pub fn magic_arg_impl(input: DeriveInput) -> TokenStream {
 
                     write_fields = quote! {
                         #write_fields
-                        wasm_calling_support::MagicArg::write(value.#ident);
+                        #magic_arg::write(value.#ident);
                     };
                 } else {
                     let index = syn::Index::from(index);
@@ -45,7 +50,7 @@ pub fn magic_arg_impl(input: DeriveInput) -> TokenStream {
 
                     write_fields = quote! {
                         #write_fields
-                        wasm_calling_support::MagicArg::write(value.#index);
+                        #magic_arg::write(value.#index);
                     };
                 }
             }
@@ -66,7 +71,9 @@ pub fn magic_arg_impl(input: DeriveInput) -> TokenStream {
     }
 
     quote! {
-        unsafe impl MagicArg for #ident {
+        unsafe impl #magic_arg for #ident {
+            const NUMBER_OF_ARGS: usize = #number_of_args;
+
             #hash [inline(always)]
             unsafe fn read() -> Self {
                 unsafe {

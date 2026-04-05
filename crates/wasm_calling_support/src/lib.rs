@@ -2,6 +2,8 @@ use std::mem::MaybeUninit;
 pub use wasm_calling_support_macros::*;
 
 pub unsafe trait MagicArg {
+    const NUMBER_OF_ARGS: usize;
+
     unsafe fn read() -> Self;
     unsafe fn write(value: Self);
 }
@@ -10,6 +12,8 @@ unsafe impl<T> MagicArg for MaybeUninit<T>
 where
     T: MagicArg,
 {
+    const NUMBER_OF_ARGS: usize = T::NUMBER_OF_ARGS;
+
     unsafe fn read() -> Self {
         unsafe { MaybeUninit::new(MagicArg::read()) }
     }
@@ -53,6 +57,8 @@ unsafe extern "C" {
 }
 
 unsafe impl MagicArg for u8 {
+    const NUMBER_OF_ARGS: usize = 1;
+
     #[inline(always)]
     unsafe fn read() -> Self {
         unsafe { wasm_calling_support_read_u8_arg() }
@@ -64,6 +70,8 @@ unsafe impl MagicArg for u8 {
     }
 }
 unsafe impl MagicArg for u16 {
+    const NUMBER_OF_ARGS: usize = 1;
+
     #[inline(always)]
     unsafe fn read() -> Self {
         unsafe { wasm_calling_support_read_u16_arg() }
@@ -75,6 +83,8 @@ unsafe impl MagicArg for u16 {
     }
 }
 unsafe impl MagicArg for u32 {
+    const NUMBER_OF_ARGS: usize = 1;
+
     #[inline(always)]
     unsafe fn read() -> Self {
         unsafe { wasm_calling_support_read_u32_arg() }
@@ -86,6 +96,8 @@ unsafe impl MagicArg for u32 {
     }
 }
 unsafe impl MagicArg for u64 {
+    const NUMBER_OF_ARGS: usize = 1;
+
     #[inline(always)]
     unsafe fn read() -> Self {
         unsafe { wasm_calling_support_read_u64_arg() }
@@ -98,6 +110,8 @@ unsafe impl MagicArg for u64 {
 }
 
 unsafe impl MagicArg for i8 {
+    const NUMBER_OF_ARGS: usize = 1;
+
     #[inline(always)]
     unsafe fn read() -> Self {
         unsafe { wasm_calling_support_read_i8_arg() }
@@ -109,6 +123,8 @@ unsafe impl MagicArg for i8 {
     }
 }
 unsafe impl MagicArg for i16 {
+    const NUMBER_OF_ARGS: usize = 1;
+
     #[inline(always)]
     unsafe fn read() -> Self {
         unsafe { wasm_calling_support_read_i16_arg() }
@@ -120,6 +136,8 @@ unsafe impl MagicArg for i16 {
     }
 }
 unsafe impl MagicArg for i32 {
+    const NUMBER_OF_ARGS: usize = 1;
+
     #[inline(always)]
     unsafe fn read() -> Self {
         unsafe { wasm_calling_support_read_i32_arg() }
@@ -131,6 +149,8 @@ unsafe impl MagicArg for i32 {
     }
 }
 unsafe impl MagicArg for i64 {
+    const NUMBER_OF_ARGS: usize = 1;
+
     #[inline(always)]
     unsafe fn read() -> Self {
         unsafe { wasm_calling_support_read_i64_arg() }
@@ -143,6 +163,8 @@ unsafe impl MagicArg for i64 {
 }
 
 unsafe impl MagicArg for usize {
+    const NUMBER_OF_ARGS: usize = 1;
+
     #[inline(always)]
     unsafe fn read() -> Self {
         unsafe { wasm_calling_support_read_usize_arg() }
@@ -154,6 +176,8 @@ unsafe impl MagicArg for usize {
     }
 }
 unsafe impl MagicArg for isize {
+    const NUMBER_OF_ARGS: usize = 1;
+
     #[inline(always)]
     unsafe fn read() -> Self {
         unsafe { wasm_calling_support_read_isize_arg() }
@@ -166,6 +190,8 @@ unsafe impl MagicArg for isize {
 }
 
 unsafe impl MagicArg for f32 {
+    const NUMBER_OF_ARGS: usize = 1;
+
     #[inline(always)]
     unsafe fn read() -> Self {
         unsafe { wasm_calling_support_read_f32_arg() }
@@ -177,6 +203,8 @@ unsafe impl MagicArg for f32 {
     }
 }
 unsafe impl MagicArg for f64 {
+    const NUMBER_OF_ARGS: usize = 1;
+
     #[inline(always)]
     unsafe fn read() -> Self {
         unsafe { wasm_calling_support_read_f64_arg() }
@@ -189,6 +217,8 @@ unsafe impl MagicArg for f64 {
 }
 
 unsafe impl<T> MagicArg for *const T {
+    const NUMBER_OF_ARGS: usize = 1;
+
     #[inline(always)]
     unsafe fn read() -> Self {
         unsafe { wasm_calling_support_read_ptr_arg() as *const T }
@@ -201,6 +231,8 @@ unsafe impl<T> MagicArg for *const T {
 }
 
 unsafe impl<T> MagicArg for *mut T {
+    const NUMBER_OF_ARGS: usize = 1;
+
     #[inline(always)]
     unsafe fn read() -> Self {
         unsafe { wasm_calling_support_read_ptr_arg() as *mut T }
@@ -216,6 +248,8 @@ unsafe impl<const N: usize, T> MagicArg for [T; N]
 where
     T: MagicArg,
 {
+    const NUMBER_OF_ARGS: usize = T::NUMBER_OF_ARGS * N;
+
     #[inline(always)]
     unsafe fn read() -> Self {
         unsafe {

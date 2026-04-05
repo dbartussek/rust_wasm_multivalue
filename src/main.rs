@@ -1,11 +1,14 @@
+pub mod support_data;
+
+use crate::support_data::SupportData;
 use clap::Parser;
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::PathBuf,
 };
 use walrus::{
-    ExportItem, FunctionBuilder, FunctionId, FunctionKind, ImportId, LocalFunction, Module,
-    ModuleFunctions, ModuleLocals, ModuleTypes, ValType,
+    ExportItem, FunctionBuilder, FunctionId, FunctionKind, LocalFunction, Module, ModuleFunctions,
+    ModuleLocals, ModuleTypes, ValType,
     ir::{
         Block, Br, BrIf, BrOnCast, BrOnCastFail, BrOnNonNull, BrOnNull, BrTable, Instr, InstrSeqId,
         InstrSeqType, Loop,
@@ -26,12 +29,11 @@ fn main() {
     let mut module = Module::from_file(&args.input).unwrap();
 
     let support = SupportData::scan(&module);
-    support.remove_from_module(&mut module);
 
     let mut candidates = Vec::new();
 
     for export in module.exports.iter() {
-        if export.name.starts_with("WRAPPED_") {
+        if export.name.starts_with("WRAPPED__") {
             candidates.push(export.clone());
         }
     }
@@ -42,7 +44,14 @@ fn main() {
             other => panic!("Export must be a function {other:?}"),
         };
 
-        let identifier = &export.name["WRAPPED_".len()..];
+        let identifier = &export.name["WRAPPED__".len()..];
+
+        let old_function = match &module.funcs.get(function_id).kind {
+            FunctionKind::Local(local) => local,
+            other => panic!("Transformed functions must be local {other:?}"),
+        };
+
+        let scanned = ScannedFunction::scan(&module, &support, identifier, old_function);
 
         let Module {
             funcs,
@@ -51,76 +60,15 @@ fn main() {
             locals,
             ..
         } = &mut module;
-
-        let old_function = match &funcs.get(function_id).kind {
-            FunctionKind::Local(local) => local,
-            other => panic!("Transformed functions must be local {other:?}"),
-        };
-
-        let new_function_id = ScannedFunction::scan(old_function, &support)
-            .build(identifier, types, funcs, locals, &support);
+        let new_function_id = scanned.build(identifier, types, funcs, locals, &support);
 
         funcs.delete(function_id);
         exports.delete(export.id());
         exports.add(identifier, new_function_id);
     }
 
+    support.remove_from_module(&mut module);
     module.emit_wasm_file(&args.output).unwrap();
-}
-
-#[derive(Debug)]
-struct SupportData {
-    support_imports: BTreeMap<ImportId, String>,
-
-    input_functions: BTreeMap<FunctionId, ValType>,
-    output_functions: BTreeMap<FunctionId, ValType>,
-}
-
-impl SupportData {
-    pub fn scan(module: &Module) -> Self {
-        let support_imports: BTreeMap<ImportId, String> = module
-            .imports
-            .iter()
-            .filter(|import| import.name.starts_with("wasm_calling_support"))
-            .map(|import| (import.id(), import.name.clone()))
-            .collect();
-
-        let mut input_functions = BTreeMap::<FunctionId, ValType>::new();
-        let mut output_functions = BTreeMap::<FunctionId, ValType>::new();
-
-        for function in module.functions() {
-            if let FunctionKind::Import(imported) = &function.kind {
-                if support_imports.contains_key(&imported.import) {
-                    let function_type = module.types.get(imported.ty).as_function().unwrap();
-
-                    if let Some(ty) = function_type.params().first() {
-                        output_functions.insert(function.id(), ty.clone());
-                    } else if let Some(ty) = function_type.results().first() {
-                        input_functions.insert(function.id(), ty.clone());
-                    }
-                }
-            }
-        }
-
-        Self {
-            support_imports,
-            input_functions,
-            output_functions,
-        }
-    }
-
-    pub fn remove_from_module(&self, module: &mut Module) {
-        for import in self.support_imports.keys() {
-            module.imports.delete(*import);
-        }
-        for function in self
-            .input_functions
-            .keys()
-            .chain(self.output_functions.keys())
-        {
-            module.funcs.delete(*function);
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -133,13 +81,22 @@ struct ScannedFunction {
 }
 
 impl ScannedFunction {
-    fn scan(source: &LocalFunction, support: &SupportData) -> Self {
+    fn scan(
+        module: &Module,
+        support: &SupportData,
+        identifier: &str,
+        source: &LocalFunction,
+    ) -> Self {
+        let (params, results) = support
+            .get_function_signature(&module.funcs, identifier)
+            .unwrap_or_else(|| panic!("Missing signature for function {identifier}"));
+
         let mut this = ScannedFunction {
             entry: source.entry_block(),
             blocks: BTreeMap::new(),
 
-            params: Vec::new(),
-            results: Vec::new(),
+            params,
+            results,
         };
 
         let mut block_ids = BTreeSet::new();
@@ -194,14 +151,6 @@ impl ScannedFunction {
                         working_set.insert(inner.block);
                     },
 
-                    Instr::Call(inner) => {
-                        if let Some(ty) = support.input_functions.get(&inner.func) {
-                            this.params.push(ty.clone());
-                        } else if let Some(ty) = support.output_functions.get(&inner.func) {
-                            this.results.push(ty.clone());
-                        }
-                    },
-
                     _ => (),
                 }
             }
@@ -244,10 +193,10 @@ impl ScannedFunction {
 
         block_id_mapping.insert(self.entry, builder.func_body_id());
 
-        let mut arg_counter = 0;
-        let mut result_counter = 0;
-
         for source_block_id in block_id_mapping.keys().copied() {
+            let mut arg_counter = 0;
+            let mut result_counter = 0;
+
             let new_block_id = block_id_mapping[&source_block_id];
 
             let mut block_builder = builder.instr_seq(new_block_id);
@@ -325,10 +274,24 @@ impl ScannedFunction {
                         }
                     },
 
+                    Instr::Return(_) => {
+                        for result in results_locals.iter().copied() {
+                            block_builder.local_get(result);
+                        }
+                        block_builder.return_();
+                    },
+
                     default => {
                         block_builder.instr(default);
                     },
                 }
+            }
+
+            if arg_counter != 0 && arg_counter != arg_locals.len() {
+                panic!("Too complex argument flow");
+            }
+            if result_counter != 0 && result_counter != results_locals.len() {
+                panic!("Too complex results flow");
             }
         }
 
