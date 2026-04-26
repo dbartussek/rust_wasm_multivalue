@@ -23,6 +23,7 @@ where
     }
 }
 
+#[link(wasm_import_module = "wasm_calling_support")]
 unsafe extern "C" {
     fn wasm_calling_support_read_u8_arg() -> u8;
     fn wasm_calling_support_write_u8_arg(value: u8);
