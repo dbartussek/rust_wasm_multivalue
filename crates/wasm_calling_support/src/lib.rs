@@ -1,4 +1,4 @@
-use std::mem::MaybeUninit;
+use std::{mem::MaybeUninit, ptr::NonNull};
 pub use wasm_calling_support_macros::*;
 
 pub unsafe trait MagicArg {
@@ -241,15 +241,26 @@ unsafe impl<T> MagicArg for *mut T {
 
     #[inline(always)]
     unsafe fn write(value: Self) {
-        unsafe { wasm_calling_support_write_ptr_arg(value as *const ()) }
+        unsafe { wasm_calling_support_write_ptr_arg(value as *mut ()) }
     }
 }
 
-unsafe impl<T> MagicArg for Box<T>
-where
-    T: MagicArg,
-{
-    const NUMBER_OF_ARGS: usize = T::NUMBER_OF_ARGS;
+unsafe impl<T> MagicArg for NonNull<T> {
+    const NUMBER_OF_ARGS: usize = 1;
+
+    #[inline(always)]
+    unsafe fn read() -> Self {
+        unsafe { NonNull::new_unchecked(wasm_calling_support_read_ptr_arg() as *mut T) }
+    }
+
+    #[inline(always)]
+    unsafe fn write(value: Self) {
+        unsafe { wasm_calling_support_write_ptr_arg(value.as_ptr() as *mut ()) }
+    }
+}
+
+unsafe impl<T> MagicArg for Box<T> {
+    const NUMBER_OF_ARGS: usize = 1;
 
     #[inline(always)]
     unsafe fn read() -> Self {
