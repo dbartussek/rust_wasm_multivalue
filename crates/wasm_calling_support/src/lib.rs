@@ -217,6 +217,18 @@ unsafe impl MagicArg for f64 {
     }
 }
 
+unsafe impl MagicArg for bool {
+    const NUMBER_OF_ARGS: usize = 1;
+
+    unsafe fn read() -> Self {
+        unsafe { u8::read() != 0 }
+    }
+
+    unsafe fn write(value: Self) {
+        unsafe { u8::write(if value { 1 } else { 0 }) }
+    }
+}
+
 unsafe impl<T> MagicArg for *const T {
     const NUMBER_OF_ARGS: usize = 1;
 
