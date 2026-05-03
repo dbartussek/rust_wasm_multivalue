@@ -227,7 +227,7 @@ unsafe impl MagicArg for bool {
 
     #[inline(always)]
     unsafe fn write(value: Self) {
-        unsafe { u8::write(if value { 1 } else { 0 }) }
+        unsafe { u8::write(u8::from(value)) }
     }
 }
 
